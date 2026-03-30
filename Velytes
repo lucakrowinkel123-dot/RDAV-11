@@ -13,7 +13,7 @@ const double RECHECK_INTERVAL_SECONDS = 1.0;
 const bool AUTO_ENABLE_PROJECTOR = true;
 const float TANK_FULL_THRESHOLD = 0.8f;
 const double TANK_SCAN_COOLDOWN_SECONDS = 2.0;
-const string SUMMARY_LCD_TAG = "#Vetile#";
+const string SUMMARY_LCD_TAG = "#Velytes#"; //Use this tag on Velytes local AI blocks/scout controller/surfaces
 const double FIREALL_INTERVAL_SECONDS = 0.2;
 const int FIREALL_MAX_ATTEMPTS_PER_TAG = 10;
 const double FIREALL_MAX_SECONDS = 10.0;
@@ -27,9 +27,9 @@ const double SUMMARY_LCD_UPDATE_SECONDS = 0.5;
 const string ALERT_SOUND_NAME = "Alert 2";
 const string TARGET_PACKET_HEADER = "VTARGET";
 const string TARGET_PACKET_VERSION = "1";
-const string IGC_SCOUT_CHANNEL = "VETILE_SCOUT_TARGET";
-const string IGC_SCOUT_CONTROL_CHANNEL = "VETILE_SCOUT_CONTROL";
-const string IGC_RDAV_TARGET_CHANNEL = "VETILE_RDAV_TARGET";
+const string IGC_SCOUT_CHANNEL = "VELYTES_SCOUT_TARGET";
+const string IGC_SCOUT_CONTROL_CHANNEL = "VELYTES_SCOUT_CONTROL";
+const string IGC_RDAV_TARGET_CHANNEL = "VELYTES_RDAV_TARGET";
 const bool ENABLE_LEGACY_DIRECT_RDAV_PUSH = false;
 const bool ENABLE_CONNECTOR_LOCKING = false; //Prefer RDAV autoconnect handling
 const double REMOTE_TARGET_STALE_SECONDS = 2.0;
@@ -147,6 +147,10 @@ int echoUpdateTickCounter;
 bool hasLastResolvedTarget;
 Vector3D lastResolvedTargetPosition = Vector3D.Zero;
 double lastResolvedTargetSeenAt = -9999;
+bool hasLocalWaypointSample;
+Vector3D localWaypointSamplePosition = Vector3D.Zero;
+double localWaypointSampleAt = -9999;
+Vector3D localWaypointVelocity = Vector3D.Zero;
 IMyFlightMovementBlock cachedLocalFlight;
 List<IMyFlightMovementBlock> localFlightLookupBuffer = new List<IMyFlightMovementBlock>();
 
@@ -1147,10 +1151,35 @@ bool TryGetLocalPacket(out TargetPacket packet)
     IMyFlightMovementBlock localFlight = cachedLocalFlight;
 
     if (localFlight == null || localFlight.CurrentWaypoint == null)
+    {
+        hasLocalWaypointSample = false;
         return false;
+    }
 
     Vector3D targetPosition = localFlight.CurrentWaypoint.Matrix.Translation;
-    Vector3D targetVelocity = Vector3D.Zero;
+    Vector3D targetVelocity = localWaypointVelocity;
+
+    if (!hasLocalWaypointSample)
+    {
+        hasLocalWaypointSample = true;
+        localWaypointSamplePosition = targetPosition;
+        localWaypointSampleAt = elapsedSeconds;
+    }
+    else
+    {
+        double sampleDt = elapsedSeconds - localWaypointSampleAt;
+        Vector3D waypointDelta = targetPosition - localWaypointSamplePosition;
+
+        // Core local fix: only resample velocity when waypoint position actually changes.
+        // Prevents alternating zero/spike velocities when local AI waypoint updates are sparse.
+        if (sampleDt > 0.001 && waypointDelta.LengthSquared() > 0.0001)
+        {
+            targetVelocity = waypointDelta / sampleDt;
+            localWaypointVelocity = targetVelocity;
+            localWaypointSamplePosition = targetPosition;
+            localWaypointSampleAt = elapsedSeconds;
+        }
+    }
 
     packet.HasTarget = true;
     packet.TargetPosition = targetPosition;
@@ -1479,7 +1508,7 @@ double NormalizeToMinusPiToPi(double radians)
 void EchoSummary()
 {
     Echo("Rotor Projection Finisher (Multi-Tag)");
-    Echo($"Runtime (Vetile): {Runtime.LastRunTimeMs:0.###} ms");
+    Echo($"Runtime (Velytes): {Runtime.LastRunTimeMs:0.###} ms");
     Echo($"Target feed: {targetSourceMode} | source={activeTargetPacket.SourceName} | id={(activeTargetPacket.HasTarget ? activeTargetPacket.TargetId.ToString() : RDAV_STATUS_NONE)} | dist={(activeTargetDistanceMeters >= 0 ? activeTargetDistanceMeters.ToString("0") + "m" : "-")}");
     Echo($"Target profile: Priority={globalTargetMode} | System={globalTargetSubsystemMode}");
     Echo($"Remote selection: {(remoteSourceOrder.Count > 0 ? GetSelectedRemoteNameOrDefault() : "none")} ({remoteSourceOrder.Count} known)");
@@ -1492,7 +1521,7 @@ void EchoSummary()
     }
 
     if (navController == null)
-        Echo("FireAll motion guard: no tagged ship controller (#Vetile#)");
+        Echo("FireAll motion guard: no tagged ship controller (#Velytes#)");
     else
         Echo($"FireAll limits: speed<={FIREALL_MAX_SPEED_MPS:0}m/s lateral<={FIREALL_MAX_LATERAL_SPEED_MPS:0}m/s yaw<={FIREALL_MAX_YAW_RATE_RAD:0.00}rad/s");
 }

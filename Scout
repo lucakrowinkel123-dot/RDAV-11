@@ -1,10 +1,10 @@
 // Space Engineers programmable block script
-// Vetile Scout Relay
-// Broadcasts target feed + scout position over IGC for Vetile to ingest.
+// Velytes Scout Relay
+// Broadcasts target feed + scout position over IGC for Velytes to ingest.
 
-const string TAG = "#Vetile#";
-const string CHANNEL = "VETILE_SCOUT_TARGET";
-const string CONTROL_CHANNEL = "VETILE_SCOUT_CONTROL";
+const string TAG = "#Velytes#";
+const string CHANNEL = "VELYTES_SCOUT_TARGET";
+const string CONTROL_CHANNEL = "VELYTES_SCOUT_CONTROL";
 const string PACKET_HEADER = "VTARGET";
 const string PACKET_VERSION = "1";
 const string SOURCE_ID_KEY = "SourceId";
@@ -22,6 +22,9 @@ int sendCounter;
 Vector3D lastTargetPosition = Vector3D.Zero;
 Vector3D lastTargetVelocity = Vector3D.Zero;
 double lastTargetSeenAt = -9999;
+Vector3D lastWaypointSamplePosition = Vector3D.Zero;
+double lastWaypointSampleAt = -9999;
+bool hasWaypointSample;
 TargetPriorityMode targetPriorityMode = TargetPriorityMode.Largest;
 TargetSubsystemMode targetSubsystemMode = TargetSubsystemMode.Any;
 
@@ -56,8 +59,8 @@ void EnsureCustomDataTemplate()
         return;
 
     Me.CustomData =
-@"# Vetile Scout Relay settings
-# Optional: set a human-friendly source name shown on RDAV/Vetile
+@"# Velytes Scout Relay settings
+# Optional: set a human-friendly source name shown on RDAV/Velytes
 SourceId=Scout-1
 # Legacy alias still supported:
 # Callsign=Scout-1";
@@ -239,7 +242,33 @@ string BuildPacket()
     {
         hasTarget = true;
         targetPos = flightBlock.CurrentWaypoint.Matrix.Translation;
-        targetVel = (targetPos - lastTargetPosition) / Math.Max(0.001, SEND_INTERVAL_SECONDS);
+
+        if (!hasWaypointSample)
+        {
+            hasWaypointSample = true;
+            lastWaypointSamplePosition = targetPos;
+            lastWaypointSampleAt = elapsedSeconds;
+            targetVel = lastTargetVelocity;
+        }
+        else
+        {
+            double sampleDt = elapsedSeconds - lastWaypointSampleAt;
+            Vector3D waypointDelta = targetPos - lastWaypointSamplePosition;
+
+            // Core fix: velocity should be based on waypoint-change cadence, not fixed send cadence.
+            // If waypoint is unchanged this tick, keep previous velocity instead of snapping to zero.
+            if (sampleDt > 0.001 && waypointDelta.LengthSquared() > 0.0001)
+            {
+                targetVel = waypointDelta / sampleDt;
+                lastWaypointSamplePosition = targetPos;
+                lastWaypointSampleAt = elapsedSeconds;
+            }
+            else
+            {
+                targetVel = lastTargetVelocity;
+            }
+        }
+
         lastTargetPosition = targetPos;
         lastTargetVelocity = targetVel;
         lastTargetSeenAt = elapsedSeconds;
@@ -250,6 +279,10 @@ string BuildPacket()
         hasTarget = true;
         targetPos = lastTargetPosition;
         targetVel = lastTargetVelocity;
+    }
+    else
+    {
+        hasWaypointSample = false;
     }
 
     Vector3D sourcePos = scoutController != null ? scoutController.GetPosition() : Me.GetPosition();
@@ -304,7 +337,7 @@ string GetCustomDataValue(string key)
 void EchoStatus(string packet)
 {
     bool hasTarget = flightBlock != null && flightBlock.CurrentWaypoint != null;
-    Echo("Vetile Scout Relay");
+    Echo("Velytes Scout Relay");
     Echo($"Tag: {TAG}");
     Echo($"Callsign: {GetCallsign()}");
     Echo($"Target profile: {targetPriorityMode}/{targetSubsystemMode}");
