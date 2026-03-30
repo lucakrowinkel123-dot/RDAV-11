@@ -21,6 +21,9 @@ double elapsedSeconds;
 int sendCounter;
 Vector3D lastTargetPosition = Vector3D.Zero;
 double lastTargetSeenAt = -9999;
+Vector3D lastWaypointSamplePosition = Vector3D.Zero;
+double lastWaypointSampleAt = -9999;
+bool hasWaypointSample;
 TargetPriorityMode targetPriorityMode = TargetPriorityMode.Largest;
 TargetSubsystemMode targetSubsystemMode = TargetSubsystemMode.Weapons;
 
