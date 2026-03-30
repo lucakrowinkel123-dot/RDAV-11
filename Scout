@@ -22,6 +22,9 @@ int sendCounter;
 Vector3D lastTargetPosition = Vector3D.Zero;
 Vector3D lastTargetVelocity = Vector3D.Zero;
 double lastTargetSeenAt = -9999;
+Vector3D lastWaypointSamplePosition = Vector3D.Zero;
+double lastWaypointSampleAt = -9999;
+bool hasWaypointSample;
 TargetPriorityMode targetPriorityMode = TargetPriorityMode.Largest;
 TargetSubsystemMode targetSubsystemMode = TargetSubsystemMode.Any;
 
@@ -239,7 +242,33 @@ string BuildPacket()
     {
         hasTarget = true;
         targetPos = flightBlock.CurrentWaypoint.Matrix.Translation;
-        targetVel = (targetPos - lastTargetPosition) / Math.Max(0.001, SEND_INTERVAL_SECONDS);
+
+        if (!hasWaypointSample)
+        {
+            hasWaypointSample = true;
+            lastWaypointSamplePosition = targetPos;
+            lastWaypointSampleAt = elapsedSeconds;
+            targetVel = lastTargetVelocity;
+        }
+        else
+        {
+            double sampleDt = elapsedSeconds - lastWaypointSampleAt;
+            Vector3D waypointDelta = targetPos - lastWaypointSamplePosition;
+
+            // Core fix: velocity should be based on waypoint-change cadence, not fixed send cadence.
+            // If waypoint is unchanged this tick, keep previous velocity instead of snapping to zero.
+            if (sampleDt > 0.001 && waypointDelta.LengthSquared() > 0.0001)
+            {
+                targetVel = waypointDelta / sampleDt;
+                lastWaypointSamplePosition = targetPos;
+                lastWaypointSampleAt = elapsedSeconds;
+            }
+            else
+            {
+                targetVel = lastTargetVelocity;
+            }
+        }
+
         lastTargetPosition = targetPos;
         lastTargetVelocity = targetVel;
         lastTargetSeenAt = elapsedSeconds;
@@ -250,6 +279,10 @@ string BuildPacket()
         hasTarget = true;
         targetPos = lastTargetPosition;
         targetVel = lastTargetVelocity;
+    }
+    else
+    {
+        hasWaypointSample = false;
     }
 
     Vector3D sourcePos = scoutController != null ? scoutController.GetPosition() : Me.GetPosition();
