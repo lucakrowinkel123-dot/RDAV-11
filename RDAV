@@ -12,10 +12,10 @@
   Quick tips;
   - Just call everything on your missile #A#, its faster this way!
   - You can use a big LCD to display tracking radar just call an LCD #A#
-  - The script requires a flight AI block and a combat offensive ai block called #A#
+  - Target tracking comes from external Velytes feed packets (no local AI blocks required in RDAV)
   - Put your indicator light (called#A#) on the outside of the ship so you can see lock in 3rd person
   - Use the argument 'Fire' to launch a missile
-  - Use the argument 'Boost' to enable boost mode for hunting supermanuverable ships, (0.2ms performance)
+  - Target prediction/lead is supplied by Velytes feed packets (RDAV Boost mode is disabled)
 
   Additional information can be found on the workshop page for the script
   Any questions or queries don't hesitate to contact me!
@@ -41,7 +41,7 @@
 
   //Launch Parameters (both times in ticks)
   const int IGNITEDELAY = 1; //ticks before engaging the engines
-  const int GUIDEDELAY = 100; //ticks before engaging guidance
+  const int GUIDEDELAY = 200; //ticks before engaging guidance
 
   //AutoLaunch Settings
   const bool EnableAutoLaunch = false; //enable for autolaunching
@@ -52,7 +52,7 @@
   const bool RenameCockpit = true; //Renames the cockpit the script uses to help  diagnose issues
   const int MissileLCD = 0; //LCD in the cockpit to use (keep this 0 unless you want it on a different screen)
   const int LocalRadarRotationQuarterTurnsCW = 1; //local radar calibration: 0=none,1=90° CW,2=180°,3=270° CW
-  int GravityAggressiveness = 5; //Auto-selected from PB tag: #A#=5, #B#=6, #C#=7, #D#=8
+  double GravityAggressiveness = 1.5; //Auto-selected from PB tag: #A#=1.5, #B#=2.0, #C#=2.5, #D#=3.0
 
   bool Autoconnect = true;//Automatically connects missile connectors so its easier to use in survival
   bool OnlyUseBlocksOnSameConstruct = false; //Use this to force script to only use same construct blocks (ie ignore connector docked stuff)
@@ -74,7 +74,7 @@
   int GuiRefreshCounter = 0;
   const int GuiRefreshIntervalTicks = 15; //redraw every other tick to reduce UI overhead
   const string ExternalTargetPacketHeader = "VTARGET";
-  const string ExternalTargetIgcChannel = "VETILE_RDAV_TARGET";
+  const string ExternalTargetIgcChannel = "VELYTES_RDAV_TARGET";
   bool ExternalFeedActive = false;
   bool ExternalFeedHasTarget = false;
   Vector3D ExternalTargetPosition = Vector3D.Zero;
@@ -1100,7 +1100,7 @@
           //-----------------------------------------------
 
           //Guides To Target Using Gyros
-          int gravityAggressiveness = 5;
+          double gravityAggressiveness = 1.5;
           Program hostProgram = Program_local as Program;
           if (hostProgram != null)
           {
@@ -1255,7 +1255,7 @@
       ApplyTagSettingsFromProgrammableBlockName();
 
       //Setup String
-      string SetupString = "Rdavs Guided Missile Script Basic Setup \n================================================== \n \n \nSystem Setup \n=================== \n \nTo Set Up The Ship: \n------------------------ \n- Put this Code Into a P-block \n- Name this PB with #A#/#B#/#C#/#D# (auto tag + gravity profile)\n- Install a light block (optional) \n- Install an Offensive combat block & Flight Block with the same tag as this PB\n- Recompile if prompted to 'reset' \n- To fire from the toolbar 'run' this Pb with \n  the argument 'Fire'";
+      string SetupString = "Rdavs Guided Missile Script Basic Setup \n================================================== \n \n \nSystem Setup \n=================== \n \nTo Set Up The Ship: \n------------------------ \n- Put this Code Into a P-block \n- Name this PB with #A#/#B#/#C#/#D# (auto tag + gravity profile)\n- Install a light block (optional) \n- Ensure Velytes is forwarding VTARGET packets on channel VELYTES_RDAV_TARGET\n- Recompile if prompted to 'reset' \n- To fire from the toolbar 'run' this Pb with \n  the argument 'Fire'";
       Me.CustomData = SetupString;
 
       if (OnlyUseBlocksOnSameConstruct)
@@ -1279,20 +1279,6 @@
       }
       //if (TempCollection3.Count > 0)
       //{ RC = TempCollection3[0] as IMyShipController; RC.CustomName = "Cockpit, RD Missile Guidance"; }
-
-      //Collects First Turret
-      List<IMyFlightMovementBlock> TempCollection = new List<IMyFlightMovementBlock>();
-      GridTerminalSystem.GetBlocksOfType<IMyFlightMovementBlock>(TempCollection, a => a.CustomName.Contains(MissileTag) && a.DetailedInfo != "NoUse" && (!OnlyUseBlocksOnSameConstruct || a.IsSameConstructAs(Me)));
-      List<IMyOffensiveCombatBlock> TempCollection01 = new List<IMyOffensiveCombatBlock>();
-      GridTerminalSystem.GetBlocksOfType<IMyOffensiveCombatBlock>(TempCollection01, a => a.CustomName.Contains(MissileTag) && a.DetailedInfo != "NoUse" && (!OnlyUseBlocksOnSameConstruct || a.IsSameConstructAs(Me)));
-      if (TempCollection.Count > 0 && TempCollection01.Count > 0)
-      {
-
-          // Find relevant blocks on the grid (you can replace with specific names or tags)
-          IMyFlightMovementBlock flightBlock = TempCollection[0];
-          IMyOffensiveCombatBlock combatBlock = TempCollection01[0];
-          ThisTracker = new RadarTrackingModule(flightBlock, combatBlock);
-      }
 
       //Collects LCD Fro Display
       // Try to find an LCD panel with the tag
@@ -1458,22 +1444,22 @@
       if (blockName.IndexOf("#D#", StringComparison.OrdinalIgnoreCase) >= 0)
       {
           MissileTag = "#D#";
-          GravityAggressiveness = 8;
+          GravityAggressiveness = 3.0;
       }
       else if (blockName.IndexOf("#C#", StringComparison.OrdinalIgnoreCase) >= 0)
       {
           MissileTag = "#C#";
-          GravityAggressiveness = 7;
+          GravityAggressiveness = 2.5;
       }
       else if (blockName.IndexOf("#B#", StringComparison.OrdinalIgnoreCase) >= 0)
       {
           MissileTag = "#B#";
-          GravityAggressiveness = 6;
+          GravityAggressiveness = 2.0;
       }
       else
       {
           MissileTag = "#A#";
-          GravityAggressiveness = 5;
+          GravityAggressiveness = 1.5;
       }
   }
 
@@ -1554,8 +1540,6 @@
       //Core Block Checks
       if (RC == null || RC.CubeGrid.GetCubeBlock(RC.Position) == null)
       { Echo(" ~ No Ship Control Found,\nInstall Forward Facing Cockpit/RC/Flightseat And Press Recompile"); RC = null; return; }
-      if (ThisTracker == null)
-      { Echo("No Target Tracking System Found\n> Make sure a combat AI block and flight AI block are installed and both have '#A#' in the name\n> Then press Recompile."); return; }
       if (GUIPanel == null)
       { Echo("No GUI Display Found\n> Install an LCD or cockpit screen with name containing the MissileTag \n> Then press Recompile."); return; }
       if (Alarm == null || Alarm.CubeGrid.GetCubeBlock(Alarm.Position) == null)
@@ -1565,14 +1549,11 @@
 
       //--------------------------------------
 
-      //Updates Tracking System
-      ThisTracker.UpdateTracking(Runtime.LifetimeTicks); //DateTime.Now.Ticks
-
       //Drops stale external feeds and selects the strongest recent source.
       ReconcileExternalSources();
 
       //Toggles LockOn
-      bool HasTarget = ThisTracker.IsTracking; //If Turret Detects Enemy
+      bool HasTarget = false;
 
       //Updates Track Location
       bool externalHasTargetStable = ExternalFeedHasTarget || (ExternalFeedActive && ExternalFeedLastTargetTick > 0 && (Runtime.LifetimeTicks - ExternalFeedLastTargetTick) <= ExternalFeedTargetGraceTicks);
@@ -1581,24 +1562,8 @@
           HasTarget = true;
           TrackedTargetLocation = ExternalTargetPosition;
           TrackedTargetVelocity = ExternalTargetVelocity;
-          Lstrundata = "TARGET LOCKED (VETILE)\nID: " + ExternalTargetId + "\nSRC: " + ExternalSourceName;
-          Lstrundata += "\nBoost: " + ThisTracker.BoostMode;
+          Lstrundata = "TARGET LOCKED (VELYTES)\nID: " + ExternalTargetId + "\nSRC: " + ExternalSourceName;
 
-          AutoLaunchTimer++;
-          if (AutoLaunchTimer > TicksBetweenAutoLaunch && EnableAutoLaunch)
-          { argument = "Fire"; AutoLaunchTimer = 0; }
-      }
-      else if (HasTarget)
-      {
-          TrackedTargetLocation = ThisTracker.TargetPosition;
-          TrackedTargetVelocity = ThisTracker.TargetVelocity;
-          Lstrundata = "TARGET LOCKED\n" + ThisTracker.TrackedObjectName;
-          Lstrundata += "\nBoost: " + ThisTracker.BoostMode;
-          //Ifdebug
-          //BoundingSphere spher = new BoundingSphere(TrackedTargetLocation, 2.5f);
-          //debug.DrawSphere(spher, Color.SkyBlue, DebugAPI.Style.Wireframe);
-
-          //Simple Auto Launch Logic
           AutoLaunchTimer++;
           if (AutoLaunchTimer > TicksBetweenAutoLaunch && EnableAutoLaunch)
           { argument = "Fire"; AutoLaunchTimer = 0; }
@@ -1608,6 +1573,7 @@
           //Puts Some Far Away Values
           TrackedTargetLocation = RC.WorldMatrix.Forward * 9000 + RC.GetPosition();
           TrackedTargetVelocity = new Vector3D();
+          Lstrundata = "All Systems Active\nAwaiting Velytes target feed";
       }
 
       //Turns Indiator Light On/Off
@@ -1666,11 +1632,11 @@
           runtimeAgs.LocalRotationQuarterTurnsCW = LocalRadarRotationQuarterTurnsCW;
           runtimeAgs.TargetLock = HasTarget;
           runtimeAgs.Targetmode = "RDAR";
-          runtimeAgs.Targetinfoline1 = ThisTracker.GetLine1Info();
-          runtimeAgs.Targetinfoline2 = ThisTracker.GetLine2Info();
+          runtimeAgs.Targetinfoline1 = ExternalFeedActive ? ("SRC: " + ExternalSourceName) : "SRC: none";
+          runtimeAgs.Targetinfoline2 = HasTarget ? ("ID: " + ExternalTargetId) : "ID: NO_TARGET";
           runtimeAgs.MissileRemainingCount = MissileRemainingCount;
           runtimeAgs.ToDisplay = new List<TrackingDisplay.TargetInfo>();
-          runtimeAgs.BoostMode = ThisTracker.BoostMode;
+          runtimeAgs.BoostMode = false;
 
           //Adds All active Missiles
           foreach (var missile in MISSILES)
@@ -1728,11 +1694,11 @@
       }
       if (argument == "Boost")
       {
-          ThisTracker.BoostMode = !ThisTracker.BoostMode;
+          Lstrundata = "Boost mode is disabled in RDAV.\nTarget prediction/lead comes from Velytes feed.";
       }
       if (argument != "Fire" && argument != "Boost" && argument != "")
       {
-          Lstrundata = "Unknown/Incorrect launch argument,\ncheck spelling & caps,\nto launch argument should be just: Fire\nOr: Boost ";
+          Lstrundata = "Unknown/Incorrect launch argument,\ncheck spelling & caps,\nto launch argument should be just: Fire";
       }
 
       //Runs Guidance Block (foreach missile)

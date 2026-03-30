@@ -13,7 +13,7 @@ const double RECHECK_INTERVAL_SECONDS = 1.0;
 const bool AUTO_ENABLE_PROJECTOR = true;
 const float TANK_FULL_THRESHOLD = 0.8f;
 const double TANK_SCAN_COOLDOWN_SECONDS = 2.0;
-const string SUMMARY_LCD_TAG = "#Vetile#";
+const string SUMMARY_LCD_TAG = "#Velytes#"; //Use this tag on Velytes local AI blocks/scout controller/surfaces
 const double FIREALL_INTERVAL_SECONDS = 0.2;
 const int FIREALL_MAX_ATTEMPTS_PER_TAG = 10;
 const double FIREALL_MAX_SECONDS = 10.0;
@@ -27,9 +27,9 @@ const double SUMMARY_LCD_UPDATE_SECONDS = 0.5;
 const string ALERT_SOUND_NAME = "Alert 2";
 const string TARGET_PACKET_HEADER = "VTARGET";
 const string TARGET_PACKET_VERSION = "1";
-const string IGC_SCOUT_CHANNEL = "VETILE_SCOUT_TARGET";
-const string IGC_SCOUT_CONTROL_CHANNEL = "VETILE_SCOUT_CONTROL";
-const string IGC_RDAV_TARGET_CHANNEL = "VETILE_RDAV_TARGET";
+const string IGC_SCOUT_CHANNEL = "VELYTES_SCOUT_TARGET";
+const string IGC_SCOUT_CONTROL_CHANNEL = "VELYTES_SCOUT_CONTROL";
+const string IGC_RDAV_TARGET_CHANNEL = "VELYTES_RDAV_TARGET";
 const bool ENABLE_LEGACY_DIRECT_RDAV_PUSH = false;
 const bool ENABLE_CONNECTOR_LOCKING = false; //Prefer RDAV autoconnect handling
 const double REMOTE_TARGET_STALE_SECONDS = 2.0;
@@ -37,6 +37,8 @@ const string RDAV_STATUS_NONE = "NO_TARGET";
 const string SOURCE_ID_KEY = "SourceId";
 const int TARGET_UPDATE_EVERY_TICKS = 3; //Update target forwarding every N script ticks (1 = every run)
 const double TARGET_PREDICTION_SECONDS =5; //Simple linear lead time
+const double RUNTIME_SPIKE_THRESHOLD_MS = 0.3; //Log spikes above this runtime (server cap target)
+const int RUNTIME_SPIKE_LOG_MAX = 30; //Ring-buffer size for spike diagnostics
 const int LOCAL_FLIGHT_LOOKUP_EVERY_TICKS = 10; //Only re-scan local flight block every N script ticks
 const int IDLE_CHANNEL_UPDATE_EVERY_TICKS = 10; //Only update stable idle channels every N script ticks
 const int ECHO_UPDATE_EVERY_TICKS = 10; //Reduce terminal string churn
@@ -89,6 +91,16 @@ class RemoteSourceState
     public TargetPacket LastPacket;
     public bool HasPacket;
     public double LastReceivedAt;
+}
+
+class RuntimeSpikeRecord
+{
+    public int Sequence;
+    public double AtSeconds;
+    public double RuntimeMs;
+    public string UpdateSource;
+    public string Argument;
+    public string Context;
 }
 
 class TagChannel
@@ -147,8 +159,14 @@ int echoUpdateTickCounter;
 bool hasLastResolvedTarget;
 Vector3D lastResolvedTargetPosition = Vector3D.Zero;
 double lastResolvedTargetSeenAt = -9999;
+bool hasLocalWaypointSample;
+Vector3D localWaypointSamplePosition = Vector3D.Zero;
+double localWaypointSampleAt = -9999;
+Vector3D localWaypointVelocity = Vector3D.Zero;
 IMyFlightMovementBlock cachedLocalFlight;
 List<IMyFlightMovementBlock> localFlightLookupBuffer = new List<IMyFlightMovementBlock>();
+List<RuntimeSpikeRecord> runtimeSpikeLog = new List<RuntimeSpikeRecord>();
+int runtimeSpikeSequence;
 
 public Program()
 {
@@ -249,6 +267,17 @@ public void Main(string argument, UpdateType updateSource)
         {
             SelectRemoteByName(argument.Substring("remote ".Length).Trim());
         }
+        else if (argument.Equals("spikes", StringComparison.OrdinalIgnoreCase) || argument.Equals("spikes dump", StringComparison.OrdinalIgnoreCase))
+        {
+            EchoRuntimeSpikes();
+            return;
+        }
+        else if (argument.Equals("spikes clear", StringComparison.OrdinalIgnoreCase))
+        {
+            runtimeSpikeLog.Clear();
+            Echo("Runtime spike log cleared.");
+            return;
+        }
     }
 
     PollScoutMessages();
@@ -308,6 +337,7 @@ public void Main(string argument, UpdateType updateSource)
         UpdateSummaryLcd();
     }
 
+    RecordRuntimeSpike(argument, updateSource);
     UpdateRuntimeFrequency();
 }
 
@@ -1038,7 +1068,7 @@ bool NameHasTag(string name, string tag)
 void RegisterScoutListener()
 {
     scoutListener = IGC.RegisterBroadcastListener(IGC_SCOUT_CHANNEL);
-    scoutListener.SetMessageCallback("scout");
+    // Intentionally no callback: polling in Main() is cheaper and avoids extra callback-triggered runs.
 }
 
 void PollScoutMessages()
@@ -1147,10 +1177,35 @@ bool TryGetLocalPacket(out TargetPacket packet)
     IMyFlightMovementBlock localFlight = cachedLocalFlight;
 
     if (localFlight == null || localFlight.CurrentWaypoint == null)
+    {
+        hasLocalWaypointSample = false;
         return false;
+    }
 
     Vector3D targetPosition = localFlight.CurrentWaypoint.Matrix.Translation;
-    Vector3D targetVelocity = Vector3D.Zero;
+    Vector3D targetVelocity = localWaypointVelocity;
+
+    if (!hasLocalWaypointSample)
+    {
+        hasLocalWaypointSample = true;
+        localWaypointSamplePosition = targetPosition;
+        localWaypointSampleAt = elapsedSeconds;
+    }
+    else
+    {
+        double sampleDt = elapsedSeconds - localWaypointSampleAt;
+        Vector3D waypointDelta = targetPosition - localWaypointSamplePosition;
+
+        // Core local fix: only resample velocity when waypoint position actually changes.
+        // Prevents alternating zero/spike velocities when local AI waypoint updates are sparse.
+        if (sampleDt > 0.001 && waypointDelta.LengthSquared() > 0.0001)
+        {
+            targetVelocity = waypointDelta / sampleDt;
+            localWaypointVelocity = targetVelocity;
+            localWaypointSamplePosition = targetPosition;
+            localWaypointSampleAt = elapsedSeconds;
+        }
+    }
 
     packet.HasTarget = true;
     packet.TargetPosition = targetPosition;
@@ -1479,7 +1534,7 @@ double NormalizeToMinusPiToPi(double radians)
 void EchoSummary()
 {
     Echo("Rotor Projection Finisher (Multi-Tag)");
-    Echo($"Runtime (Vetile): {Runtime.LastRunTimeMs:0.###} ms");
+    Echo($"Runtime (Velytes): {Runtime.LastRunTimeMs:0.###} ms");
     Echo($"Target feed: {targetSourceMode} | source={activeTargetPacket.SourceName} | id={(activeTargetPacket.HasTarget ? activeTargetPacket.TargetId.ToString() : RDAV_STATUS_NONE)} | dist={(activeTargetDistanceMeters >= 0 ? activeTargetDistanceMeters.ToString("0") + "m" : "-")}");
     Echo($"Target profile: Priority={globalTargetMode} | System={globalTargetSubsystemMode}");
     Echo($"Remote selection: {(remoteSourceOrder.Count > 0 ? GetSelectedRemoteNameOrDefault() : "none")} ({remoteSourceOrder.Count} known)");
@@ -1492,7 +1547,77 @@ void EchoSummary()
     }
 
     if (navController == null)
-        Echo("FireAll motion guard: no tagged ship controller (#Vetile#)");
+        Echo("FireAll motion guard: no tagged ship controller (#Velytes#)");
     else
         Echo($"FireAll limits: speed<={FIREALL_MAX_SPEED_MPS:0}m/s lateral<={FIREALL_MAX_LATERAL_SPEED_MPS:0}m/s yaw<={FIREALL_MAX_YAW_RATE_RAD:0.00}rad/s");
+
+    if (runtimeSpikeLog.Count > 0)
+    {
+        RuntimeSpikeRecord latest = runtimeSpikeLog[runtimeSpikeLog.Count - 1];
+        Echo($"Runtime spikes: {runtimeSpikeLog.Count} (latest #{latest.Sequence} {latest.RuntimeMs:0.###}ms @ {latest.AtSeconds:0.0}s)");
+    }
+    else
+    {
+        Echo($"Runtime spikes: 0 (threshold {RUNTIME_SPIKE_THRESHOLD_MS:0.###}ms)");
+    }
+}
+
+void RecordRuntimeSpike(string argument, UpdateType updateSource)
+{
+    double runtimeMs = Runtime.LastRunTimeMs;
+    if (runtimeMs < RUNTIME_SPIKE_THRESHOLD_MS)
+        return;
+
+    RuntimeSpikeRecord record = new RuntimeSpikeRecord();
+    record.Sequence = ++runtimeSpikeSequence;
+    record.AtSeconds = elapsedSeconds;
+    record.RuntimeMs = runtimeMs;
+    record.UpdateSource = updateSource.ToString();
+    record.Argument = string.IsNullOrWhiteSpace(argument) ? "-" : argument.Trim();
+    record.Context = BuildRuntimeContextSnapshot();
+    runtimeSpikeLog.Add(record);
+    if (runtimeSpikeLog.Count > RUNTIME_SPIKE_LOG_MAX)
+        runtimeSpikeLog.RemoveAt(0);
+}
+
+string BuildRuntimeContextSnapshot()
+{
+    int connectedChannels = 0;
+    int spinningChannels = 0;
+    int parkedChannels = 0;
+    foreach (var kv in channels)
+    {
+        var ch = kv.Value;
+        if (ch == null)
+            continue;
+        if (ch.Connectors != null && ch.Connectors.Count > 0)
+            connectedChannels++;
+        if (ch.State == ControllerState.Spinning)
+            spinningChannels++;
+        if (ch.State == ControllerState.Parked)
+            parkedChannels++;
+    }
+
+    string dist = activeTargetDistanceMeters >= 0 ? activeTargetDistanceMeters.ToString("0") : "-";
+    string sourceName = string.IsNullOrWhiteSpace(activeTargetPacket.SourceName) ? "none" : activeTargetPacket.SourceName;
+    string targetState = activeTargetPacket.HasTarget ? "LOCK" : "NONE";
+    return $"srcMode={targetSourceMode}, src={sourceName}, tgt={targetState}, dist={dist}m, fireAll={fireAllSequenceActive}, q={fireAllQueue.Count}, remotes={remoteSourceOrder.Count}, spin={spinningChannels}, parked={parkedChannels}, connTags={connectedChannels}";
+}
+
+void EchoRuntimeSpikes()
+{
+    Echo($"Runtime spike log ({runtimeSpikeLog.Count}/{RUNTIME_SPIKE_LOG_MAX}), threshold={RUNTIME_SPIKE_THRESHOLD_MS:0.###}ms");
+    if (runtimeSpikeLog.Count == 0)
+    {
+        Echo("No runtime spikes recorded.");
+        return;
+    }
+
+    int start = Math.Max(0, runtimeSpikeLog.Count - 10);
+    for (int i = start; i < runtimeSpikeLog.Count; i++)
+    {
+        RuntimeSpikeRecord r = runtimeSpikeLog[i];
+        Echo($"#{r.Sequence} t={r.AtSeconds:0.0}s run={r.RuntimeMs:0.###}ms arg={r.Argument} src={r.UpdateSource}");
+        Echo($"  {r.Context}");
+    }
 }
