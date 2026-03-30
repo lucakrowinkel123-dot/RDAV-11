@@ -1,12 +1,12 @@
 // Space Engineers programmable block script
-// Vetile Scout Relay
-// Broadcasts target feed + scout position over IGC for Vetile to ingest.
+// Velytes Scout Relay
+// Broadcasts target feed + scout position over IGC for Velytes to ingest.
 
-const string TAG = "#Vetile#";
-const string CHANNEL = "VETILE_SCOUT_TARGET";
-const string CONTROL_CHANNEL = "VETILE_SCOUT_CONTROL";
+const string TAG = "#Velytes#";
+const string CHANNEL = "VELYTES_SCOUT_TARGET";
+const string CONTROL_CHANNEL = "VELYTES_SCOUT_CONTROL"; //kept for backward compatibility; control updates are ignored
 const string PACKET_HEADER = "VTARGET";
-const string PACKET_VERSION = "1";
+const string PACKET_VERSION = "2";
 const string SOURCE_ID_KEY = "SourceId";
 const string CALLSIGN_KEY = "Callsign";
 const double SEND_INTERVAL_SECONDS = 0.1;
@@ -20,10 +20,9 @@ double sendTimer;
 double elapsedSeconds;
 int sendCounter;
 Vector3D lastTargetPosition = Vector3D.Zero;
-Vector3D lastTargetVelocity = Vector3D.Zero;
 double lastTargetSeenAt = -9999;
 TargetPriorityMode targetPriorityMode = TargetPriorityMode.Largest;
-TargetSubsystemMode targetSubsystemMode = TargetSubsystemMode.Any;
+TargetSubsystemMode targetSubsystemMode = TargetSubsystemMode.Weapons;
 
 enum TargetPriorityMode
 {
@@ -45,7 +44,6 @@ public Program()
     Runtime.UpdateFrequency = UpdateFrequency.Update10;
     EnsureCustomDataTemplate();
     LoadBlocks();
-    RegisterControlListener();
 }
 
 public void Save() { }
@@ -56,8 +54,8 @@ void EnsureCustomDataTemplate()
         return;
 
     Me.CustomData =
-@"# Vetile Scout Relay settings
-# Optional: set a human-friendly source name shown on RDAV/Vetile
+@"# Velytes Scout Relay settings
+# Optional: set a human-friendly source name shown on RDAV/Velytes
 SourceId=Scout-1
 # Legacy alias still supported:
 # Callsign=Scout-1";
@@ -74,8 +72,6 @@ public void Main(string argument, UpdateType updateSource)
         else if (argument.Equals("ping", StringComparison.OrdinalIgnoreCase))
             Echo("pong");
     }
-
-    PollControlMessages();
 
     sendTimer += Runtime.TimeSinceLastRun.TotalSeconds;
     if (sendTimer < SEND_INTERVAL_SECONDS)
@@ -166,8 +162,9 @@ void ConfigureAiBlocks()
         combatBlock.SetValue<long>("OffensiveCombatIntercept_GuidanceType", 0);
         combatBlock.SetValueBool("OffensiveCombatIntercept_OverrideCollisionAvoidance", true);
         combatBlock.ApplyAction("ActivateBehavior_On");
-        ApplyCombatActionSafe(combatBlock, GetPriorityAction(targetPriorityMode), "SetTargetPriority_Largest");
-        ApplyCombatActionSafe(combatBlock, GetSubsystemAction(targetSubsystemMode), "SetTargetingGroup_Any");
+        // Simplified fixed startup profile.
+        ApplyCombatActionSafe(combatBlock, "SetTargetPriority_Largest", "SetTargetPriority_Largest");
+        ApplyCombatActionSafe(combatBlock, "SetTargetingGroup_Weapons", "SetTargetingGroup_Weapons");
     }
 }
 
@@ -239,17 +236,9 @@ string BuildPacket()
     {
         hasTarget = true;
         targetPos = flightBlock.CurrentWaypoint.Matrix.Translation;
-        targetVel = (targetPos - lastTargetPosition) / Math.Max(0.001, SEND_INTERVAL_SECONDS);
+        targetVel = Vector3D.Zero; //unaltered target from AI; Velytes infers velocity/lead
         lastTargetPosition = targetPos;
-        lastTargetVelocity = targetVel;
         lastTargetSeenAt = elapsedSeconds;
-    }
-    else if ((elapsedSeconds - lastTargetSeenAt) <= 2.0)
-    {
-        // Short persistence window to tolerate occasional null waypoint frames.
-        hasTarget = true;
-        targetPos = lastTargetPosition;
-        targetVel = lastTargetVelocity;
     }
 
     Vector3D sourcePos = scoutController != null ? scoutController.GetPosition() : Me.GetPosition();
@@ -258,12 +247,12 @@ string BuildPacket()
     string sourceName = GetCallsign();
 
     return string.Format(
-        "{0}|{1}|{2}|{3:0.###}|{4:0.###}|{5:0.###}|{6:0.###}|{7:0.###}|{8:0.###}|{9:0.###}|{10:0.###}|{11:0.###}|{12}|{13}|{14:0.###}|{15:0.###}|{16:0.###}|{17:0.###}|{18:0.###}|{19:0.###}|{20:0.###}",
+        // Compact v2 packet: omits target velocity fields; Velytes infers velocity from sequential positions.
+        "{0}|{1}|{2}|{3:0.###}|{4:0.###}|{5:0.###}|{6:0.###}|{7:0.###}|{8:0.###}|{9}|{10}|{11:0.###}|{12:0.###}|{13:0.###}|{14:0.###}|{15:0.###}|{16:0.###}|{17:0.###}",
         PACKET_HEADER,
         PACKET_VERSION,
         hasTarget ? 1 : 0,
         targetPos.X, targetPos.Y, targetPos.Z,
-        targetVel.X, targetVel.Y, targetVel.Z,
         sourcePos.X, sourcePos.Y, sourcePos.Z,
         targetId,
         sourceName,
@@ -304,10 +293,10 @@ string GetCustomDataValue(string key)
 void EchoStatus(string packet)
 {
     bool hasTarget = flightBlock != null && flightBlock.CurrentWaypoint != null;
-    Echo("Vetile Scout Relay");
+    Echo("Velytes Scout Relay");
     Echo($"Tag: {TAG}");
     Echo($"Callsign: {GetCallsign()}");
-    Echo($"Target profile: {targetPriorityMode}/{targetSubsystemMode}");
+    Echo("Target profile: Largest/Weapons (fixed)");
     Echo($"Target: {(hasTarget ? "LOCK" : "NONE")}");
     Echo($"TargetPersistAge: {(elapsedSeconds - lastTargetSeenAt):0.0}s");
     Echo($"FlightAI: {(flightBlock != null ? "OK" : "MISSING")}");
