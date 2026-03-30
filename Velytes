@@ -36,7 +36,7 @@ const double REMOTE_TARGET_STALE_SECONDS = 2.0;
 const string RDAV_STATUS_NONE = "NO_TARGET";
 const string SOURCE_ID_KEY = "SourceId";
 const int TARGET_UPDATE_EVERY_TICKS = 3; //Update target forwarding every N script ticks (1 = every run)
-const double TARGET_PREDICTION_SECONDS =5; //Simple linear lead time
+const double TARGET_PREDICTION_SECONDS =5; //Simple lag-compensation lead timer
 const double RUNTIME_SPIKE_THRESHOLD_MS = 0.3; //Log spikes above this runtime (server cap target)
 const int RUNTIME_SPIKE_LOG_MAX = 30; //Ring-buffer size for spike diagnostics
 const int LOCAL_FLIGHT_LOOKUP_EVERY_TICKS = 10; //Only re-scan local flight block every N script ticks
@@ -134,7 +134,7 @@ IMyTextPanel summaryLcd;
 IMySoundBlock alertSoundBlock;
 IMyShipController navController;
 TargetPriorityMode globalTargetMode = TargetPriorityMode.Largest;
-TargetSubsystemMode globalTargetSubsystemMode = TargetSubsystemMode.Any;
+TargetSubsystemMode globalTargetSubsystemMode = TargetSubsystemMode.Weapons;
 Queue<TagChannel> fireAllQueue = new Queue<TagChannel>();
 bool fireAllSequenceActive;
 double fireAllTimer;
@@ -221,20 +221,11 @@ public void Main(string argument, UpdateType updateSource)
             DetonateRememberedWarheadsAll();
             return;
         }
-        else if (argument.Equals("cycletarget", StringComparison.OrdinalIgnoreCase) || argument.Equals("target", StringComparison.OrdinalIgnoreCase))
+        else if (argument.Equals("cycletarget", StringComparison.OrdinalIgnoreCase) || argument.Equals("target", StringComparison.OrdinalIgnoreCase)
+            || argument.Equals("targetsystem", StringComparison.OrdinalIgnoreCase) || argument.Equals("cyclesystem", StringComparison.OrdinalIgnoreCase)
+            || argument.Equals("targetboth", StringComparison.OrdinalIgnoreCase))
         {
-            CycleTargetPriorityAll();
-            return;
-        }
-        else if (argument.Equals("targetsystem", StringComparison.OrdinalIgnoreCase) || argument.Equals("cyclesystem", StringComparison.OrdinalIgnoreCase))
-        {
-            CycleTargetSubsystemAll();
-            return;
-        }
-        else if (argument.Equals("targetboth", StringComparison.OrdinalIgnoreCase))
-        {
-            CycleTargetPriorityAll();
-            CycleTargetSubsystemAll();
+            Echo("Target profile switching is disabled. Using Largest/Weapons.");
             return;
         }
         else if (argument.Equals("start", StringComparison.OrdinalIgnoreCase) || argument.Equals("forcestart", StringComparison.OrdinalIgnoreCase))
@@ -1120,18 +1111,18 @@ void ResolveAndForwardTarget()
     if (packet.HasTarget)
     {
         Vector3D measuredPosition = packet.TargetPosition;
-        Vector3D predictionVelocity = packet.TargetVelocity;
-        if (predictionVelocity.LengthSquared() < 0.01 && hasLastResolvedTarget)
+        Vector3D inferredVelocity = Vector3D.Zero;
+        if (hasLastResolvedTarget)
         {
             double dt = elapsedSeconds - lastResolvedTargetSeenAt;
             if (dt > 0.001)
             {
-                predictionVelocity = (measuredPosition - lastResolvedTargetPosition) / dt;
+                inferredVelocity = (measuredPosition - lastResolvedTargetPosition) / dt;
             }
         }
 
-        packet.TargetVelocity = predictionVelocity;
-        packet.TargetPosition = measuredPosition + predictionVelocity * TARGET_PREDICTION_SECONDS;
+        packet.TargetVelocity = inferredVelocity;
+        packet.TargetPosition = measuredPosition + inferredVelocity * TARGET_PREDICTION_SECONDS;
         hasLastResolvedTarget = true;
         lastResolvedTargetPosition = measuredPosition;
         lastResolvedTargetSeenAt = elapsedSeconds;
@@ -1425,7 +1416,7 @@ bool TryParseTargetPacket(string payload, out TargetPacket packet)
 {
     packet = new TargetPacket();
     var parts = payload.Split('|');
-    if (parts.Length < 15)
+    if (parts.Length < 12)
         return false;
     if (!parts[0].Equals(TARGET_PACKET_HEADER, StringComparison.OrdinalIgnoreCase))
         return false;
@@ -1435,28 +1426,50 @@ bool TryParseTargetPacket(string payload, out TargetPacket packet)
         return false;
     packet.HasTarget = hasTargetInt == 1;
 
-    double x, y, z, vx, vy, vz, sx, sy, sz, timestamp;
+    double x, y, z, vx = 0, vy = 0, vz = 0, sx, sy, sz, timestamp;
     double sfx = 0, sfy = 0, sfz = 1, sux = 0, suy = 1, suz = 0;
     long targetId;
     if (!double.TryParse(parts[3], out x)) return false;
     if (!double.TryParse(parts[4], out y)) return false;
     if (!double.TryParse(parts[5], out z)) return false;
-    if (!double.TryParse(parts[6], out vx)) return false;
-    if (!double.TryParse(parts[7], out vy)) return false;
-    if (!double.TryParse(parts[8], out vz)) return false;
-    if (!double.TryParse(parts[9], out sx)) return false;
-    if (!double.TryParse(parts[10], out sy)) return false;
-    if (!double.TryParse(parts[11], out sz)) return false;
-    if (!long.TryParse(parts[12], out targetId)) targetId = 0;
-    if (!double.TryParse(parts[14], out timestamp)) timestamp = elapsedSeconds;
-    if (parts.Length >= 21)
+
+    // Supports both packet variants:
+    // v1/full:  header|ver|has|tx|ty|tz|tvx|tvy|tvz|sx|sy|sz|id|name|time|sfx|sfy|sfz|sux|suy|suz
+    // v2/compact(header|ver|has|tx|ty|tz|sx|sy|sz|id|name|time|sfx|sfy|sfz|sux|suy|suz)
+    bool isFullPacket = parts.Length >= 21;
+    if (isFullPacket)
     {
+        if (!double.TryParse(parts[6], out vx)) return false;
+        if (!double.TryParse(parts[7], out vy)) return false;
+        if (!double.TryParse(parts[8], out vz)) return false;
+        if (!double.TryParse(parts[9], out sx)) return false;
+        if (!double.TryParse(parts[10], out sy)) return false;
+        if (!double.TryParse(parts[11], out sz)) return false;
+        if (!long.TryParse(parts[12], out targetId)) targetId = 0;
+        if (!double.TryParse(parts[14], out timestamp)) timestamp = elapsedSeconds;
         double.TryParse(parts[15], out sfx);
         double.TryParse(parts[16], out sfy);
         double.TryParse(parts[17], out sfz);
         double.TryParse(parts[18], out sux);
         double.TryParse(parts[19], out suy);
         double.TryParse(parts[20], out suz);
+    }
+    else
+    {
+        if (!double.TryParse(parts[6], out sx)) return false;
+        if (!double.TryParse(parts[7], out sy)) return false;
+        if (!double.TryParse(parts[8], out sz)) return false;
+        if (!long.TryParse(parts[9], out targetId)) targetId = 0;
+        if (!double.TryParse(parts[11], out timestamp)) timestamp = elapsedSeconds;
+        if (parts.Length >= 18)
+        {
+            double.TryParse(parts[12], out sfx);
+            double.TryParse(parts[13], out sfy);
+            double.TryParse(parts[14], out sfz);
+            double.TryParse(parts[15], out sux);
+            double.TryParse(parts[16], out suy);
+            double.TryParse(parts[17], out suz);
+        }
     }
 
     packet.TargetPosition = new Vector3D(x, y, z);
@@ -1465,7 +1478,7 @@ bool TryParseTargetPacket(string payload, out TargetPacket packet)
     packet.SourceForward = new Vector3D(sfx, sfy, sfz);
     packet.SourceUp = new Vector3D(sux, suy, suz);
     packet.TargetId = targetId;
-    packet.SourceName = parts[13];
+    packet.SourceName = isFullPacket ? parts[13] : parts[10];
     packet.Timestamp = timestamp;
     return true;
 }
