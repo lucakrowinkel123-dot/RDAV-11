@@ -37,7 +37,7 @@ const string RDAV_STATUS_NONE = "NO_TARGET";
 const string SOURCE_ID_KEY = "SourceId";
 const int TARGET_UPDATE_EVERY_TICKS = 3; //Update target forwarding every N script ticks (1 = every run)
 const double TARGET_PREDICTION_SECONDS =5; //Simple linear lead time
-const double RUNTIME_SPIKE_THRESHOLD_MS = 0.8; //Log spikes above this runtime
+const double RUNTIME_SPIKE_THRESHOLD_MS = 0.3; //Log spikes above this runtime (server cap target)
 const int RUNTIME_SPIKE_LOG_MAX = 30; //Ring-buffer size for spike diagnostics
 const int LOCAL_FLIGHT_LOOKUP_EVERY_TICKS = 10; //Only re-scan local flight block every N script ticks
 const int IDLE_CHANNEL_UPDATE_EVERY_TICKS = 10; //Only update stable idle channels every N script ticks
@@ -1068,7 +1068,7 @@ bool NameHasTag(string name, string tag)
 void RegisterScoutListener()
 {
     scoutListener = IGC.RegisterBroadcastListener(IGC_SCOUT_CHANNEL);
-    scoutListener.SetMessageCallback("scout");
+    // Intentionally no callback: polling in Main() is cheaper and avoids extra callback-triggered runs.
 }
 
 void PollScoutMessages()
