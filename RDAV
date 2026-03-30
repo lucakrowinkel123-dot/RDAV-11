@@ -41,7 +41,7 @@
 
   //Launch Parameters (both times in ticks)
   const int IGNITEDELAY = 1; //ticks before engaging the engines
-  const int GUIDEDELAY = 100; //ticks before engaging guidance
+  const int GUIDEDELAY = 200; //ticks before engaging guidance
 
   //AutoLaunch Settings
   const bool EnableAutoLaunch = false; //enable for autolaunching
@@ -52,7 +52,7 @@
   const bool RenameCockpit = true; //Renames the cockpit the script uses to help  diagnose issues
   const int MissileLCD = 0; //LCD in the cockpit to use (keep this 0 unless you want it on a different screen)
   const int LocalRadarRotationQuarterTurnsCW = 1; //local radar calibration: 0=none,1=90° CW,2=180°,3=270° CW
-  int GravityAggressiveness = 5; //Auto-selected from PB tag: #A#=5, #B#=6, #C#=7, #D#=8
+  double GravityAggressiveness = 1.5; //Auto-selected from PB tag: #A#=1.5, #B#=2.0, #C#=2.5, #D#=3.0
 
   bool Autoconnect = true;//Automatically connects missile connectors so its easier to use in survival
   bool OnlyUseBlocksOnSameConstruct = false; //Use this to force script to only use same construct blocks (ie ignore connector docked stuff)
@@ -1100,7 +1100,7 @@
           //-----------------------------------------------
 
           //Guides To Target Using Gyros
-          int gravityAggressiveness = 5;
+          double gravityAggressiveness = 1.5;
           Program hostProgram = Program_local as Program;
           if (hostProgram != null)
           {
@@ -1444,22 +1444,22 @@
       if (blockName.IndexOf("#D#", StringComparison.OrdinalIgnoreCase) >= 0)
       {
           MissileTag = "#D#";
-          GravityAggressiveness = 8;
+          GravityAggressiveness = 3.0;
       }
       else if (blockName.IndexOf("#C#", StringComparison.OrdinalIgnoreCase) >= 0)
       {
           MissileTag = "#C#";
-          GravityAggressiveness = 7;
+          GravityAggressiveness = 2.5;
       }
       else if (blockName.IndexOf("#B#", StringComparison.OrdinalIgnoreCase) >= 0)
       {
           MissileTag = "#B#";
-          GravityAggressiveness = 6;
+          GravityAggressiveness = 2.0;
       }
       else
       {
           MissileTag = "#A#";
-          GravityAggressiveness = 5;
+          GravityAggressiveness = 1.5;
       }
   }
 
