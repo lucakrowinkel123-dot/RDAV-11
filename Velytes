@@ -147,6 +147,10 @@ int echoUpdateTickCounter;
 bool hasLastResolvedTarget;
 Vector3D lastResolvedTargetPosition = Vector3D.Zero;
 double lastResolvedTargetSeenAt = -9999;
+bool hasLocalWaypointSample;
+Vector3D localWaypointSamplePosition = Vector3D.Zero;
+double localWaypointSampleAt = -9999;
+Vector3D localWaypointVelocity = Vector3D.Zero;
 IMyFlightMovementBlock cachedLocalFlight;
 List<IMyFlightMovementBlock> localFlightLookupBuffer = new List<IMyFlightMovementBlock>();
 
@@ -1147,10 +1151,35 @@ bool TryGetLocalPacket(out TargetPacket packet)
     IMyFlightMovementBlock localFlight = cachedLocalFlight;
 
     if (localFlight == null || localFlight.CurrentWaypoint == null)
+    {
+        hasLocalWaypointSample = false;
         return false;
+    }
 
     Vector3D targetPosition = localFlight.CurrentWaypoint.Matrix.Translation;
-    Vector3D targetVelocity = Vector3D.Zero;
+    Vector3D targetVelocity = localWaypointVelocity;
+
+    if (!hasLocalWaypointSample)
+    {
+        hasLocalWaypointSample = true;
+        localWaypointSamplePosition = targetPosition;
+        localWaypointSampleAt = elapsedSeconds;
+    }
+    else
+    {
+        double sampleDt = elapsedSeconds - localWaypointSampleAt;
+        Vector3D waypointDelta = targetPosition - localWaypointSamplePosition;
+
+        // Core local fix: only resample velocity when waypoint position actually changes.
+        // Prevents alternating zero/spike velocities when local AI waypoint updates are sparse.
+        if (sampleDt > 0.001 && waypointDelta.LengthSquared() > 0.0001)
+        {
+            targetVelocity = waypointDelta / sampleDt;
+            localWaypointVelocity = targetVelocity;
+            localWaypointSamplePosition = targetPosition;
+            localWaypointSampleAt = elapsedSeconds;
+        }
+    }
 
     packet.HasTarget = true;
     packet.TargetPosition = targetPosition;
